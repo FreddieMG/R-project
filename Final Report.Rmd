@@ -1,0 +1,765 @@
+---
+title: "Final report"
+output: pdf_document
+date: '2022-06-18'
+editor_options: 
+  markdown: 
+    wrap: 60
+---
+```{r load-packages, message=FALSE, include=FALSE}
+library(knitr)
+library(tidyverse)
+library(broom)
+library(htmltools)
+library(devtools)
+library(lmtest)
+library(caret)
+library(tidymodels)
+library(tseries)
+library(forecast)
+library(reshape2)
+
+```
+
+```{r setup, include = FALSE}
+opts_chunk$set(echo=FALSE) # hide source code in the document
+```
+## Link to Code and Data
+
+## Introduction
+
+## Data Overview
+
+```{r include=FALSE}
+polarization = read.csv('../data/Polarization.csv')
+```
+
+[**Table 1-Polarization**]{.underline}: Contains the amount of votes
+received by anti-establishment (radical) parties in each elections in
+each country in our representative sample. Source: whogoverns.eu
+
+[Columns:]{.underline} country, year- year of election, pervote- percent
+of vote received by radical parties.
+
+```{r include=FALSE}
+refugees = read.csv('../data/Refugees.csv')
+```
+
+[**Table 2- Refugees**]{.underline}: Contains data about incoming
+refugees and asylum seekers (we will refer to asylum seekers as refugees
+as well). Source: UNHCR
+
+[Columns:]{.underline} Year, origin- Country of origin of the refugees,
+continent - continent of origin country, asylum - country of asylum
+reached by the refugees, asylum_ISO - country code for asylum country.
+refugees - amount of refugees, asylum_seekers- amount of asylum seekers.
+
+```{r include=FALSE}
+population = read.csv('../data/Population.csv')
+```
+
+[**Table 3- Population**]{.underline}: Contains data about populations
+of the different countries. Source: UN.
+
+Columns: Country, year, population.
+
+## Methods and Results
+
+**Data Engineering**
+
+1.  Create total arrivals from refugees + asylum seekers
+2.  Filter years from 1968 onwards due to constraints of election data.
+3.  Group by asylum country, year.
+4.  Create additional columns of amount of arrivals originating from
+    each continent.
+5.  Considering that we predict that election results will be affected
+    by the number of incoming refugees in the years leading up to the
+    election as well as in the year of the election, we have added
+    cumulative columns that include the number of incoming refugees
+    during this year as well as the 2 years prior.
+6.  Since the amount of incoming refugees can impact countries with
+    different population sizes differently, we've created columns that
+    show the cumulative amount of incoming refugees as a percent of the
+    total population.
+
+```{r include=FALSE}
+polarization <- filter(polarization, year>=1968)
+```
+
+```{r message=FALSE, include=FALSE}
+aggregated_asylum <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968) %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(total_arrivals = Refugees + asylum_seekers)
+
+
+refugees_from_europe <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Europe') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(europian_refugees = Refugees + asylum_seekers) %>%
+  select(europian_refugees, Year, asylum_ISO )
+
+refugees_from_africa <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Africa') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(african_refugees = Refugees + asylum_seekers) %>%
+  select(african_refugees, Year, asylum_ISO )
+
+refugees_from_asia <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Asia') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(asian_refugees = Refugees + asylum_seekers) %>%
+  select(asian_refugees, Year, asylum_ISO )
+
+refugees_from_oceania <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Oceania') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(oceanian_refugees = Refugees + asylum_seekers) %>%
+  select(oceanian_refugees, Year, asylum_ISO )
+
+refugees_from_americas <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Americas') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(american_refugees = Refugees + asylum_seekers) %>%
+  select(american_refugees, Year, asylum_ISO )
+
+refugees_from_stateless <- refugees %>%
+  filter(asylum_ISO%in%c('FRA', 'DEU', 'AUT', 'SWE', 'BEL','DNK', 'GRC', 'ITA', 'ESP', 'HUN'), Year>=1968, continent == 'Stateless') %>%
+  group_by(Year, asylum_ISO) %>%
+  summarise(Refugees = sum(Refugees), asylum_seekers = sum(asylum_seekers)) %>%
+  mutate(stateless_refugees = Refugees + asylum_seekers) %>%
+  select(stateless_refugees, Year, asylum_ISO)
+
+```
+
+```{r include=FALSE}
+
+
+aggregated_asylum <- merge(aggregated_asylum, refugees_from_europe, by = c("Year", "asylum_ISO")  ,all.x = TRUE)
+aggregated_asylum <- merge(aggregated_asylum, refugees_from_africa, by = c("Year", "asylum_ISO")  ,all.x = TRUE)
+aggregated_asylum <- merge(aggregated_asylum, refugees_from_asia, by = c("Year", "asylum_ISO")  ,all.x = TRUE)
+aggregated_asylum <- merge(aggregated_asylum, refugees_from_americas, by = c("Year", "asylum_ISO")  ,all.x = TRUE)
+aggregated_asylum <- merge(aggregated_asylum, refugees_from_stateless, by = c("Year", "asylum_ISO")  ,all.x = TRUE)
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+aggregated_asylum
+
+```
+
+```{r include=FALSE}
+# percent refugee from each continent
+aggregated_asylum <- aggregated_asylum %>%
+        mutate(percent_american_refugees = (american_refugees/total_arrivals)*100, percent_europian_refugees = (europian_refugees/total_arrivals)*100,
+               percent_asian_refugees = (asian_refugees/total_arrivals)*100, percent_stateless_refugees = (stateless_refugees/total_arrivals)*100,
+                percent_african_refugees = (african_refugees/total_arrivals)*100)
+
+aggregated_asylum
+
+```
+
+```{r}
+# agr_arrivals_all = c()
+# cur_sum = 0
+# j = 1
+# maxx = length(yearly_arrivals_all_2021)
+# for (year in relevant_years_all){
+#   for (i in 1:maxx){
+#     if (between(year-yearly_arrivals_all_2021[i], 0, 2)){
+#       cur_sum = cur_sum + arrival_amount_all[i]
+#     }
+#     if (yearly_arrivals_all_2021[i] > year){
+#       agr_arrivals_all = append(agr_arrivals_all, cur_sum)
+#       cur_sum = 0
+#       break
+#     }
+#   }
+# }
+# agr_arrivals_all = append(agr_arrivals_all, cur_sum)
+# print(cor.test(agr_arrivals_all, pervote_all, method="pearson"))
+```
+
+```{r include=FALSE}
+add_2_previous_years <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[5]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[5]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[5]])[1]
+}
+
+
+# print(apply(aggregated_asylum, 1, add_2_previous_years ))
+
+aggregated_asylum$cumulative_refugees <- apply(aggregated_asylum, 1, add_2_previous_years )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+```
+
+```{r include=FALSE}
+add_2_previous_years_europe <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[6]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[6]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[6]])[1]
+}
+aggregated_asylum$cumulative_europian_refugees <- apply(aggregated_asylum, 1, add_2_previous_years_europe )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+```
+
+```{r include=FALSE}
+add_2_previous_years_africa <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[7]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[7]]
+  +
+filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[7]])[1]
+}
+
+
+aggregated_asylum$cumulative_african_refugees <- apply(aggregated_asylum, 1, add_2_previous_years_africa )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+
+
+
+add_2_previous_years_asia <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[8]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[8]]
+  +
+filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[8]])[1]
+}
+
+
+aggregated_asylum$cumulative_asian_refugees <- apply(aggregated_asylum, 1, add_2_previous_years_asia )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+
+
+add_2_previous_years_america <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[9]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[9]]
+  +
+filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[9]])[1]
+}
+
+
+aggregated_asylum$cumulative_american_refugees <- apply(aggregated_asylum, 1, add_2_previous_years_america )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+
+
+
+add_2_previous_years_stateless <- function(Row) {
+  year <- strtoi(Row[1])
+  country_iso <- Row[2]
+ 
+  if (year < 1970) {
+    return (0)
+  }
+ 
+(filter(aggregated_asylum, asylum_ISO == country_iso, Year == year)[[10]]
+  +
+  filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-1)[[10]]
+  +
+filter(aggregated_asylum, asylum_ISO == country_iso, Year == year-2)[[10]])[1]
+}
+
+
+aggregated_asylum$cumulative_stateless_refugees <- apply(aggregated_asylum, 1, add_2_previous_years_stateless )
+aggregated_asylum[is.na(aggregated_asylum)] = 0
+```
+
+```{r include=FALSE}
+polarization<-polarization %>%
+  mutate(asylum_ISO = case_when(
+    country == "France" ~ "FRA",
+     country == "Sweden" ~ "SWE",
+     country == "Germany" ~ "DEU",
+     country == "Austria" ~ "AUT",
+     country == "Italy" ~ "ITA",
+     country == "Belgium" ~ "BEL",
+     country == "Spain" ~ "ESP",
+     country == "Hungary" ~ "HUN",
+     country == "Denmark" ~ "DNK",
+     country == "Greece" ~ "GRC"
+   
+  ))%>%
+  rename (Year = year)
+```
+
+```{r include=FALSE}
+data = merge(x= aggregated_asylum ,y=polarization, by = c("Year","asylum_ISO"))
+data
+data_for_graphs = merge(x= aggregated_asylum ,y=polarization, by = c("Year","asylum_ISO"), all.x=TRUE)
+```
+
+```{r include=FALSE}
+data <- merge( x = population , y = data , by.x = c("year","country_ISO"), by.y = c("Year","asylum_ISO"))
+data
+data_for_graphs = merge( x = population , y = data_for_graphs , by.x = c("year","country_ISO"), by.y = c("Year","asylum_ISO"))
+```
+
+```{r include=FALSE}
+normalized_data <- data %>%
+mutate(percent_refugee = (total_arrivals/population)*100,
+       percent_cumulative = (cumulative_refugees/population)*100)
+
+normalized_for_graphs <- data_for_graphs %>%
+mutate(percent_refugee = (total_arrivals/population)*100,
+       percent_cumulative = (cumulative_refugees/population)*100) %>%
+  filter(year >= 1970)
+
+
+normalized_for_graphs_year <- normalized_for_graphs %>%
+  group_by(year) %>%
+  summarise(total_arrivals = sum(total_arrivals), american_refugees = sum(american_refugees), europian_refugees=sum(europian_refugees),
+            stateless_refugees=sum(stateless_refugees), asian_refugees=sum(asian_refugees),
+            african_refugees = sum(african_refugees), population = sum(population), pervote = mean(pervote, na.rm = TRUE))  %>%
+    mutate(Percent_american_refugees = (american_refugees/population)*100, Percent_europian_refugees = (europian_refugees/population)*100,
+               Percent_stateless_refugees = (stateless_refugees/population)*100, Percent_asian_refugees = (asian_refugees/population)*100,
+               Percent_african_refugees = (african_refugees/population)*100, percent_refugee = (total_arrivals/population)*100)    
+
+
+normalized_data <- normalized_data %>%
+                      filter(year >= 1970)
+
+normalized_data <- normalized_data %>%
+      mutate(
+      percent_cumulative_europian_refugees = (cumulative_europian_refugees/population)*100,
+      percent_cumulative_african_refugees = (cumulative_african_refugees/population)*100,
+      percent_cumulative_asian_refugees = (cumulative_asian_refugees/population)*100,
+      percent_cumulative_american_refugees = (cumulative_europian_refugees/population)*100,
+      percent_cumulative_stateless_refugees = (cumulative_stateless_refugees/population)*100
+      )
+
+normalized_data
+normalized_for_graphs_year
+normalized_data_4 = filter(normalized_for_graphs, country_ISO%in%c('AUT', 'SWE', 'DEU', 'DNK'))
+
+```
+
+**Initial Visualizations:**
+
+We've made visualizations of the data from several countries separately
+and from an aggregate of the 10 countries, to try and see if there's a
+connection between the percent of radical votes and the number of
+incoming refugees in the years prior to the vote:
+
+```{r warning=FALSE}
+ggplot(data = normalized_data_4, aes(x=year),fig(30,4)) +
+  geom_bar(stat="identity", orientation = "x",
+           mapping=aes(x=year, y= pervote, Justification='vote', color = "Precent of vote"), fill='bisque3')+
+ geom_line(mapping=aes(y=percent_refugee*5, lty='Refugee arrivals'), color = 'deepskyblue', size=1)+
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Refugee arrivals", labels = function(x)x/5,
+   
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*1, name="Precent of Vote to Radical Parties")
+  )+
+labs(
+    color = 'Refugee Arrivals',
+    title = "Number of Arriving Refugees (as Percent of Population)&
+    Precent of Vote to Radical Political Parties",
+    subtitle = "Divided by Country",
+    caption = 'sources: UNHCR & whogoverns.eu',
+    )+
+  xlab('Year')+
+  guides(size = FALSE)+
+  theme(legend.title=element_blank(), panel.grid = element_line(linetype = 'solid', color = 'gray'), panel.background = element_rect(fill='white', colour='black'))+
+  facet_wrap(~country_ISO, ncol=2, scales='free')
+```
+
+```{r fig.height=4, fig.width=6, warning=FALSE}
+
+normalized_for_graphs_year_temp <- normalized_for_graphs_year %>%
+                                  select(year,Percent_asian_refugees, Percent_europian_refugees,
+                                         Percent_american_refugees, Percent_stateless_refugees,
+                                         percent_refugee, Percent_african_refugees ) %>%
+                                  mutate_all(~.*40) %>%
+                                  mutate(year = year/40)
+
+                                         
+
+df = melt(normalized_for_graphs_year_temp, id.vars = "year", variable.name = "series")
+
+ggplot(df, aes(year, value)) +
+    geom_bar(stat="identity", orientation = "x",
+           mapping=aes(x=year, y= pervote, Justification='vote', color = "Precent of vote"), fill='bisque3',color = "black" , data=normalized_for_graphs_year)+
+  geom_line(aes(colour = series), size = 2)+
+
+
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Refugee arrivals", labels = function(x)x/25,
+
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*1, name="Precent of Vote to Radical Parties")
+  )+
+labs(
+    color = 'Refugee Arrivals',
+    title = "Number of Arriving Refugees (as Percent of Population)&
+    Precent of Vote to Radical Political Parties",
+    subtitle = "Aggregate of 10 Countries",
+    caption = 'sources: UNHCR & whogoverns.eu',
+    )+
+  xlab('Year')+
+  guides(size = FALSE)+
+  theme(legend.title=element_blank(), panel.grid = element_line(linetype = 'solid', color = 'gray'), panel.background = element_rect(fill='white', colour='black'))
+
+```
+
+Seemingly, there is correlation between the number of incoming refugees
+and the amount of votes received by radical parties, at least in some
+countries and in the aggregated graph.
+
+We checked for Pearson correlation between the variables, for each
+country and for the aggregate: 4 out of 10 countries have clear positive
+correlation (p_value \< 0.05). Austria: P_value = 0.0045, correlation =
+0.67; Germany: P_value = 0.02, correlation = 0.61; Belgium: P_value =
+0.0003, correlation = 0.8; Sweden: P_value = 0.025, correlation = 0.57;
+Aggregate: P_value = , correlation = ;
+
+```{r include=FALSE}
+countries_dataframe_arr<-split(normalized_data, normalized_data$country_ISO)
+```
+
+```{r  include=FALSE}
+
+
+check_correlation <- function(country_data){
+
+print(country_data[1, "country_ISO"])
+cor.test(country_data$pervote, country_data$percent_cumulative, method="pearson")
+
+}
+map(countries_dataframe_arr, check_correlation )
+
+```
+
+```{r}
+aggregated_Radical_votes <- polarization %>%
+  group_by(year) %>%
+  # summarise(pervote = mean(pervote), vote_diff=mean(vote_diff))
+  summarise(pervote = mean(pervote))
+# all_votes <- filter(all_votes, year>=1970)
+all_votes = filter(aggregated_Radical_votes, year>1968)
+pervote_all = pull(all_votes, pervote)
+aggregated_asylum_year <- aggregated_asylum%>%
+                        filter(Year >= 1970)%>%
+                        group_by(Year) %>%
+                        summarise(   total_arrivals= mean(total_arrivals) , cumulative_refugees = mean(cumulative_refugees))
+print(length(pervote_all))
+print(length(aggregated_asylum_year$cumulative_refugees))
+print(cor.test(pervote_all, aggregated_asylum_year$cumulative_refugees, method="pearson"))
+```
+
+We then checked for Granger-causality in the countries that showed
+correlation and received the following P values:
+
+Austria: 0.37; Germany: = 0.5; Belgium: 0.07; Sweden: 0.69; Aggregate:
+0.41
+
+```{r include=FALSE}
+
+
+check_causation <- function(country_data){
+
+print(country_data[1, "country_ISO"])
+
+pervote = country_data$pervote
+per_refugees = country_data$percent_cumulative
+grangertest(pervote[1:length(pervote)-1]~per_refugees[2:length(per_refugees)], order=1)
+
+}
+map(countries_dataframe_arr, check_causation)
+
+```
+
+```{r include=FALSE}
+normalized_data_per_year = normalized_data %>%
+  filter(1968 <= year, year <= 2021) %>%
+  group_by(year) %>%
+  summarise(pervote = mean(pervote), percent_cumulative = mean(percent_cumulative),
+            cumulative_refugees = mean(cumulative_refugees), percent_refugee = mean(percent_refugee),
+            total_arrivals = mean(total_arrivals))
+pervote = normalized_data_per_year$pervote
+per_refugees = normalized_data_per_year$percent_cumulative
+grangertest(pervote[1:length(pervote)-1]~per_refugees[2:length(per_refugees)], order=1)
+```
+
+These results indicate that the cumulative percent of incoming refugees
+does not Granger-cause a change in the percent of votes received by
+radical parties in any of the countries.
+
+However, since the Granger-test (and other linear relationships between
+variables) can be negatively affected if there is a trend in the data,
+we checked if the both variables show a trend that depends on time,
+which is a recommended practice when calculating statistical data on
+time-series. We've performed the Augmented Dickey--Fuller test, and the
+KPSS test and the results showed a need to detrend our data.
+
+```{r include=FALSE}
+# Check if time series are stationary
+for (ISO in distinct(normalized_data, country_ISO)[[1]]){
+  print(ISO)
+  ISO_normalized <- normalized_data %>%
+    filter(country_ISO==ISO)
+  print('pervotes:')
+  print(adf.test(ISO_normalized$pervote))
+  print(kpss.test(ISO_normalized$pervote))
+  
+  print(ndiffs(ISO_normalized$pervote))
+  print('arrivals:')
+  print(adf.test(ISO_normalized$cumulative_refugees))
+  print(kpss.test(ISO_normalized$cumulative_refugees))
+  print(ndiffs(ISO_normalized$cumulative_refugees))
+
+}
+```
+
+```{r include=FALSE}
+# Check if time series are stationary
+
+print('pervotes:')
+print(adf.test(normalized_data$pervote))
+print(kpss.test(normalized_data$pervote))
+
+print(ndiffs(normalized_data$pervote))
+print('arrivals:')
+print(adf.test(normalized_data$cumulative_refugees))
+print(kpss.test(normalized_data$cumulative_refugees))
+print(ndiffs(normalized_data$cumulative_refugees))
+
+```
+
+We then detrended our data, which means we've calculated regression
+lines for percent refugees and percent of radical votes with the
+explaining variables being the year, and then calculated the residuals
+from the expected values.
+
+```{r include=FALSE}
+
+normalized_for_graphs_year
+
+percent_cumulative = normalized_data$percent_cumulative
+percent_trend = lm(percent_cumulative~normalized_data$year)
+percent_cumulative_detrended = residuals(percent_trend)
+
+
+cur_pervotes = normalized_data$pervote
+pervotes_trend = lm(cur_pervotes~normalized_data$year, na.action="na.exclude")
+pervotes_detrended = residuals(pervotes_trend)
+
+normalized_for_graphs_year
+
+percent_refugee = normalized_for_graphs_year$percent_refugee
+percent_trend = lm(percent_refugee~normalized_for_graphs_year$year)
+normalized_for_graphs_year$percent_refugee_detrended = residuals(percent_trend)
+
+
+cur_pervotes = normalized_for_graphs_year$pervote
+pervotes_trend = lm(cur_pervotes~normalized_for_graphs_year$year, na.action="na.exclude")
+normalized_for_graphs_year$pervotes_detrended = residuals(pervotes_trend)
+
+
+Percent_asian_refugees = normalized_for_graphs_year$Percent_asian_refugees
+percent_trend = lm(Percent_asian_refugees~normalized_for_graphs_year$year)
+normalized_for_graphs_year$Percent_asian_refugees_detrended = residuals(percent_trend)
+
+Percent_europian_refugees = normalized_for_graphs_year$Percent_europian_refugees
+percent_trend = lm(Percent_europian_refugees~normalized_for_graphs_year$year)
+normalized_for_graphs_year$Percent_europian_refugees_detrended = residuals(percent_trend)
+
+Percent_american_refugees = normalized_for_graphs_year$Percent_american_refugees
+percent_trend = lm(Percent_american_refugees~normalized_for_graphs_year$year)
+normalized_for_graphs_year$Percent_american_refugees_detrended = residuals(percent_trend)
+
+Percent_stateless_refugees = normalized_for_graphs_year$Percent_stateless_refugees
+percent_trend = lm(Percent_stateless_refugees~normalized_for_graphs_year$year)
+normalized_for_graphs_year$Percent_stateless_refugees_detrended = residuals(percent_trend)
+
+Percent_african_refugees = normalized_for_graphs_year$Percent_african_refugees
+percent_trend = lm(Percent_african_refugees~normalized_for_graphs_year$year)
+normalized_for_graphs_year$Percent_african_refugees_detrended = residuals(percent_trend)
+
+
+normalized_for_graphs_year_temp <- normalized_for_graphs_year %>%
+                                  select(year,Percent_asian_refugees_detrended, Percent_europian_refugees_detrended,
+                                         Percent_american_refugees_detrended, Percent_stateless_refugees_detrended,
+                                         percent_refugee_detrended, Percent_african_refugees_detrended ) %>%
+                                  mutate_all(~.*40) %>%
+                                  mutate(year = year/40)
+           
+
+                             
+
+df = melt(normalized_for_graphs_year_temp, id.vars = "year", variable.name = "series")
+
+```
+
+This is the same plot as earlier, now using detrended data:
+
+```{r echo=FALSE, warning=FALSE}
+
+ggplot(df, aes(year, value)) +
+    geom_bar(stat="identity", orientation = "x",
+           mapping=aes(x=year, y= pervotes_detrended, Justification='vote', color = "Precent of vote"), fill='bisque3',color = "black" , data=normalized_for_graphs_year)+
+  geom_line(aes(colour = series), size = 1.5)+
+
+
+  scale_y_continuous(
+    # Features of the first axis
+    name = "Refugee arrivals", labels = function(x)x/25,
+
+    # Add a second axis and specify its features
+    sec.axis = sec_axis(~.*1, name="Precent of Vote to Radical Parties")
+  )+
+labs(
+    color = 'Refugee Arrivals',
+    title = "Number of Arriving Refugees (as Percent of Population)&
+    Precent of Vote to Radical Political Parties",
+    subtitle = "aggregate of 10 Countries",
+    caption = 'sources: UNHCR & whogoverns.eu',
+    )+
+  xlab('Year')+
+  guides(size = FALSE)+
+  theme(legend.title=element_blank(), panel.grid = element_line(linetype = 'solid', color = 'gray'), panel.background = element_rect(fill='white', colour='black'))
+
+
+```
+
+We then checked the correlations in each country, but the results were
+not significant and the correlation results were inconclusive. However,
+when looking at the aggregate, we got a negative correlation of -0.24
+with very high confidence level: P value = 0.013.
+
+```{r include=FALSE}
+for (ISO in (distinct(normalized_data, country_ISO)[[1]])){
+  print(ISO)
+  ISO_normalized <- normalized_data %>%
+    filter(country_ISO==ISO)
+  cur_pervotes = ISO_normalized$pervote
+  pervotes_trend = lm(cur_pervotes~ISO_normalized$year)
+  cur_arrivals = ISO_normalized$cumulative_refugees
+  arrivals_trend = lm(cur_arrivals~ISO_normalized$year)
+  pervotes_detrended = residuals(pervotes_trend)
+  arrivals_detrended = residuals(arrivals_trend)
+  print(mean(ISO_normalized$percent_cumulative))
+  print(cor.test(arrivals_detrended,pervotes_detrended, method="pearson"))
+}
+print('Aggregate')
+cur_pervotes = normalized_data$pervote
+pervotes_trend = lm(cur_pervotes~normalized_data$year)
+percent_cumulative = normalized_data$percent_cumulative
+percent_cumulative_trend = lm(percent_cumulative~normalized_data$year)
+pervotes_detrended = residuals(pervotes_trend)
+percent_cumulative_detrended = residuals(percent_cumulative_trend)
+print(mean(normalized_data$percent_cumulative))
+print(cor.test(percent_cumulative_detrended,pervotes_detrended, method="pearson"))
+print(grangertest(pervotes_detrended[1:length(pervotes_detrended)-1]~percent_cumulative_detrended[2:length(percent_cumulative_detrended)]))
+
+```
+
+Additionaly, we wanted to check if the correlation of the change in
+votes for radical parties was different when looking at the number of
+refugees arriving from different continents. To our surprise, even
+though most of the results were not at a high confidence level, the
+center of the correlation's confidence interval was very similar for all
+continents (-0.06 to -0.17).
+
+```{r include=FALSE}
+
+cur_percent_cumulative_europian_refugees = normalized_data$percent_cumulative_europian_refugees
+percent_cumulative_europian_refugees_trend = lm(cur_percent_cumulative_europian_refugees~normalized_data$year)
+percent_cumulative_europian_refugees_detrended = residuals(percent_cumulative_europian_refugees_trend)
+
+
+cur_percent_cumulative_african_refugees = normalized_data$percent_cumulative_african_refugees
+percent_cumulative_african_refugees_trend = lm(cur_percent_cumulative_african_refugees~normalized_data$year)
+percent_cumulative_african_refugees_detrended = residuals(percent_cumulative_african_refugees_trend)
+
+cur_percent_cumulative_asia_refugees = normalized_data$percent_cumulative_asian_refugees
+percent_cumulative_asia_refugees_trend = lm(cur_percent_cumulative_asia_refugees~normalized_data$year)
+percent_cumulative_asia_refugees_detrended = residuals(percent_cumulative_asia_refugees_trend)
+
+cur_percent_cumulative_america_refugees = normalized_data$percent_cumulative_american_refugees
+percent_cumulative_america_refugees_trend = lm(cur_percent_cumulative_america_refugees~normalized_data$year)
+percent_cumulative_america_refugees_detrended = residuals(percent_cumulative_america_refugees_trend)
+
+cur_percent_cumulative_stateless_refugees = normalized_data$percent_cumulative_stateless_refugees
+percent_cumulative_stateless_refugees_trend = lm(cur_percent_cumulative_stateless_refugees~normalized_data$year)
+percent_cumulative_stateless_refugees_detrended = residuals(percent_cumulative_stateless_refugees_trend)
+
+
+print(cor.test(pervotes_detrended, percent_cumulative_europian_refugees_detrended, method="pearson"))
+print(cor.test(pervotes_detrended, percent_cumulative_african_refugees_detrended, method="pearson"))
+print(cor.test(pervotes_detrended, percent_cumulative_asia_refugees_detrended, method="pearson"))
+print(cor.test(pervotes_detrended, percent_cumulative_america_refugees_detrended, method="pearson"))
+print(cor.test(pervotes_detrended, percent_cumulative_stateless_refugees_detrended, method="pearson"))
+```
+
+We trained a linear regression model, in order to find how well the
+percent of arriving refugees assists in prediction of the percent of
+votes to radical parties.
+
+We have built models that use the data of origin continent of the refugees but ultimately the explained variance of these features was very similar to 
+total amount of refugees and therefore had high P value. We ended up only using the total amount of cumulative refugees (detrended of course).
+```{r include=FALSE}
+plot(percent_cumulative_detrended, pervotes_detrended, pch = 10, cex = 1.3  )
+
+basic <- lm(pervotes_detrended~percent_cumulative_detrended )
+sm <- summary(basic)
+print(sm)
+abline(basic, col = "red")
+```
+
+Conclusions:
+
+This is the opposite of what we saw before detrending the data, which
+means that the change of each time-series with time was the reason we
+saw the correlation previously, and that the data actually shows that
+increase
+
+The R-squared shows that this can explain about 5% of the election
+results, which is very
