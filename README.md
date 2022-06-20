@@ -6,7 +6,7 @@ https://drive.google.com/drive/folders/1jtBOjE-rx2WcY3mUChY8E1gANAjyrA6R
 
 Instruction for analysis: 
 1) Place the data folder and the final_project in the same directory.
-2) in order to run the notebook you will need to install the following libraries:
+2) In order to run the notebook you will need to install the following libraries:
 * knitr
 * tidyverse
 * broom
@@ -19,4 +19,4 @@ Instruction for analysis:
 * forecast
 * reshape2
 
-4) Run markdown file.
+3) Run markdown file.
